@@ -1,4 +1,5 @@
 import torch
+import inspect
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
@@ -70,7 +71,14 @@ class Generator_vllm:
             stop=stop
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.llm = LLM(model, tensor_parallel_size=tensor_parallel_size, enforce_eager=True, swap_space=64)
+        llm_kwargs = {
+            'tensor_parallel_size': tensor_parallel_size,
+            'enforce_eager': True,
+        }
+        # vLLM 0.32 removed the legacy swap_space engine argument.
+        if 'swap_space' in inspect.signature(LLM).parameters:
+            llm_kwargs['swap_space'] = 64
+        self.llm = LLM(model, **llm_kwargs)
         
     def generating(self, input_prompts):
         completions = self.llm.generate(input_prompts, self.sampling_params)

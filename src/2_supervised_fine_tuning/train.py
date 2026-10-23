@@ -1,10 +1,43 @@
 import os 
 import json
+import warnings
+import numpy as np
+from typing import Any, Dict, List, Union
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import LoraConfig
-from trl import SFTTrainer, SFTConfig, DataCollatorForCompletionOnlyLM
+from trl import SFTTrainer, SFTConfig
+try:
+    from trl import DataCollatorForCompletionOnlyLM
+except ImportError:
+    from transformers import DataCollatorForLanguageModeling
+
+    class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
+        """Compatibility collator for TRL releases that removed this export."""
+
+        def __init__(self, response_template: Union[str, List[int]], *args, **kwargs):
+            super().__init__(*args, mlm=False, **kwargs)
+            if isinstance(response_template, str):
+                response_template = self.tokenizer.encode(
+                    response_template, add_special_tokens=False
+                )
+            self.response_token_ids = response_template
+
+        def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]):
+            batch = super().torch_call(examples)
+            for row in range(len(examples)):
+                start = None
+                token_ids = self.response_token_ids
+                for idx in np.where(batch["labels"][row] == token_ids[0])[0]:
+                    if token_ids == batch["labels"][row][idx : idx + len(token_ids)].tolist():
+                        start = idx
+                if start is None:
+                    warnings.warn("Response template was not found; ignoring this example.")
+                    batch["labels"][row, :] = -100
+                else:
+                    batch["labels"][row, : start + len(token_ids)] = -100
+            return batch
 import fire
 import wandb
 

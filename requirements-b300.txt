@@ -1,0 +1,25 @@
+# B300 environment resolved on 2026-10-23.
+# CUDA/PyTorch/vLLM are selected for Blackwell compute capability 10.3.
+vllm==0.32.0
+torch==2.13.0
+# B300 smoke runs use the CUDA 13.0 toolchain and precompiled kernels so
+# FlashInfer does not JIT-compile against the host CUDA installation.
+nvidia-cuda-nvcc==13.0.88
+flashinfer-python==0.7.0.post1
+flashinfer-cubin==0.7.0.post1
+flashinfer-jit-cache==0.7.0.post1+cu130
+flashinfer-jit-cache-sm103a==0.7.0.post1+cu130
+transformers==5.19.0
+accelerate==1.15.0
+trl==1.16.0
+liger-kernel==0.8.5
+peft==0.21.2
+datasets==5.1.0
+pandas==3.1.0
+numpy==2.3.5
+tqdm==4.70.1
+fire==0.7.1
+wandb==0.31.0
+requests==2.34.2
+python-dotenv==1.2.4
+openai==3.37.0

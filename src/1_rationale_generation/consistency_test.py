@@ -74,6 +74,12 @@ def main(
         print(f"Already processed until {len(results)}th rationale")
     else:
         start_index = 0
+
+    if not new_dict_list:
+        raise ValueError(
+            "No high-quality rationales were available for consistency testing. "
+            "Inspect 2-predictions.json and 3-high_quality_rationales.json."
+        )
     
     generator = Generator_vllm(model=base_model_name, 
                                stop_string="[", 
@@ -88,7 +94,8 @@ def main(
         if i % save_frequency == 0:
             json.dump(new_dict_list_2, open(output_fname, 'w'), indent=4)   
     
-    json.dump(new_dict_list_2, open(output_fname, 'w'), indent=4)   
+    new_dict_list_2 = [dict(new_dict_list[i], **results[i]) for i in range(len(results))]
+    json.dump(new_dict_list_2, open(output_fname, 'w'), indent=4)
     
     consistency_scores = []
     for i in range(num):
