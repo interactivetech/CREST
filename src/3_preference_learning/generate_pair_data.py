@@ -87,21 +87,35 @@ def generate(
     output_dir = '',
     template_file_path = '',
 ):
-    # os.makedirs(stage_3_processed_dir, exist_ok=True)
+    if not stage_1_result or not output_dir or not template_file_path:
+        raise ValueError("stage_1_result, output_dir, and template_file_path are required")
+
     fname_cs = '4-hq_rationale_with_consistency_score.json'
     fname_hq = '3-high_quality_rationales.json'
     fname_lq = '3-low_quality_rationales.json'
     
-    hq_data = json.load(open(os.path.join(stage_1_result, fname_hq)))
+    with open(os.path.join(stage_1_result, fname_hq)) as stream:
+        hq_data = json.load(stream)
     hq_data_df = pd.DataFrame(hq_data)
     hq_data_df['prediction'] = hq_data_df['prediction'].apply(lambda x: x.upper())
 
-    lq_data = json.load(open(os.path.join(stage_1_result, fname_lq)))
+    with open(os.path.join(stage_1_result, fname_lq)) as stream:
+        lq_data = json.load(stream)
     lq_data_df = pd.DataFrame(lq_data)
     lq_data_df['prediction'] = lq_data_df['prediction'].apply(lambda x: x.upper())
 
-    cs_data = json.load(open(os.path.join(stage_1_result, fname_cs)))
+    with open(os.path.join(stage_1_result, fname_cs)) as stream:
+        cs_data = json.load(stream)
     cs_data_df = pd.DataFrame(cs_data)
+
+    required_columns = {'id_string', 'passage', 'question', 'answers', 'label', 'rationale', 'prediction'}
+    for name, frame in [('high-quality', hq_data_df), ('low-quality', lq_data_df)]:
+        missing = required_columns - set(frame.columns)
+        if missing:
+            raise ValueError(f"{name} rationale file is missing columns: {sorted(missing)}")
+    missing = (required_columns | {'consistency_score'}) - set(cs_data_df.columns)
+    if missing:
+        raise ValueError(f"consistency rationale file is missing columns: {sorted(missing)}")
     
     train_data, dev_data, test_data = binary_set_pairing(hq_data_df, lq_data_df)
     z_pair_df = pd.DataFrame(train_data)
@@ -168,9 +182,11 @@ def generate(
         instruction = template_dict['instruction']
         Template_input = template_dict['first_input'] + '\n\n' + template_dict['oneshot_input']
         Template_output = template_dict['oneshot_output']
+        if train_df.empty:
+            raise ValueError(f"No preference pairs were generated for {output_folder}")
         train_queries = []
         for idx, row in tqdm(train_df.iterrows(), total=len(train_df), desc=f'{output_folders}'):
-            query = dataset_collate_fn(row, Template_input, instruction)
+            query = dataset_collate_fn(row, instruction, Template_input)
             train_queries.append(query)
             
         train_df['query'] = train_queries
@@ -179,13 +195,14 @@ def generate(
         
         train_df.drop(columns=['passage', 'question', 'answers', 'rationale_j', 'rationale_k', 'prediction_j', 'prediction_k'], inplace=True)
         
-        if 'consistency_score_j' and 'consistency_score_k' in train_df.columns:
+        if {'consistency_score_j', 'consistency_score_k'}.issubset(train_df.columns):
             train_df.drop(columns=['consistency_score_j', 'consistency_score_k'], inplace=True)
             
         os.makedirs(output_dir_path, exist_ok=True)
         
         train_df['pair_id'] = [i for i in range(len(train_df))]
         train_df.to_json(f'{output_dir_path}/qjk_train_data.json', orient='records', lines=True)
+        print(f"Wrote {len(train_df)} {output_folder} preference pairs to {output_dir_path}/qjk_train_data.json")
         
         
 if __name__ == '__main__':

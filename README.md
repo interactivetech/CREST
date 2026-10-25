@@ -21,6 +21,7 @@ You can run CREST using Bash scripts located in the `scripts` directory.
 - `crest_stage_1.sh`: rationale generation and evaluation
 - `crest_stage_2.sh`: supervised fine-tuning with rationale filtering
 - `crest_stage_3.sh`: preference learning with DPO
+- `crest_stage_3_b300.sh`: scratch-backed ReClor stage 3 DPO training and validation
 - `direct_fine-tune_stage_2.sh`: codes for the experiments of direct fine-tuning approaches
 
 Initial settings are configured with `data=ReClor` and `base_model=Llama 3 8B`. Make sure to update the home directory path like `home=$(pwd)`, as well as other variables (e.g., dataset, hyperparameters) as needed.
