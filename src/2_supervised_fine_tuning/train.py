@@ -11,32 +11,36 @@ from trl import SFTTrainer, SFTConfig
 try:
     from trl import DataCollatorForCompletionOnlyLM
 except ImportError:
-    from transformers import DataCollatorForLanguageModeling
-
-    class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
-        """Compatibility collator for TRL releases that removed this export."""
+    class DataCollatorForCompletionOnlyLM:
+        """Completion-only collator for TRL versions without the legacy class."""
 
         def __init__(self, response_template: Union[str, List[int]], *args, **kwargs):
-            super().__init__(*args, mlm=False, **kwargs)
+            self.tokenizer = kwargs["tokenizer"]
             if isinstance(response_template, str):
                 response_template = self.tokenizer.encode(
                     response_template, add_special_tokens=False
                 )
             self.response_token_ids = response_template
 
-        def torch_call(self, examples: List[Union[List[int], Any, Dict[str, Any]]]):
-            batch = super().torch_call(examples)
+        def __call__(self, examples: List[Union[List[int], Any, Dict[str, Any]]]):
+            import torch
+
+            features = [{key: value for key, value in row.items() if key != "labels"}
+                        for row in examples]
+            batch = self.tokenizer.pad(features, padding=True, return_tensors="pt")
+            labels = batch["input_ids"].clone()
+            labels[batch["attention_mask"] == 0] = -100
+            marker = self.response_token_ids
             for row in range(len(examples)):
-                start = None
-                token_ids = self.response_token_ids
-                for idx in np.where(batch["labels"][row] == token_ids[0])[0]:
-                    if token_ids == batch["labels"][row][idx : idx + len(token_ids)].tolist():
-                        start = idx
+                sequence = batch["input_ids"][row].tolist()
+                start = next((idx for idx in range(len(sequence) - len(marker) + 1)
+                              if sequence[idx:idx + len(marker)] == marker), None)
                 if start is None:
                     warnings.warn("Response template was not found; ignoring this example.")
-                    batch["labels"][row, :] = -100
+                    labels[row, :] = -100
                 else:
-                    batch["labels"][row, : start + len(token_ids)] = -100
+                    labels[row, :start + len(marker)] = -100
+            batch["labels"] = labels
             return batch
 import fire
 import wandb
@@ -58,6 +62,7 @@ def main(
     key='sft_training_test',
     padding_side='left', 
     template_dict_path = None,
+    max_length=2048,
 ):
     # WANDB_PROJECT
     os.environ["WANDB_PROJECT"] = key
@@ -104,10 +109,20 @@ def main(
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = padding_side
     
-    prompt_list = generate_prompt_train(train_data, tokenizer, instruction=instruction, template=template, test=False)
     os.makedirs(output_dir, exist_ok=True)
-    json.dump(prompt_list, open(os.path.join(output_dir,"training_prompt_list.json"), "w"), indent=4)
-    print(f"Prompt list saved at {os.path.join(output_dir, 'training_prompt_list.json')}")
+
+    # TRL 1.x consumes a text column directly. Building it once also avoids
+    # passing a batch-shaped formatter to versions that invoke formatters on
+    # individual examples.
+    def add_text(batch):
+        return {"text": generate_prompt_train(
+            batch, tokenizer=tokenizer, instruction=instruction, template=template
+        )}
+
+    train_data = train_data.map(add_text, batched=True, desc="Formatting prompts")
+    train_data = train_data.remove_columns(
+        [column for column in train_data.column_names if column != "text"]
+    )
     
     if CoT:
         response_template = "[Rationale]\n"
@@ -121,7 +136,7 @@ def main(
         gradient_accumulation_steps=int(simulated_batch//per_device_train_batch_size),
         optim='adamw_torch',
         warmup_steps=100,
-        evaluation_strategy="no",
+        eval_strategy="no",
         save_strategy="epoch", 
         learning_rate=lr,
         # fp16=True, 
@@ -130,7 +145,8 @@ def main(
         push_to_hub=False,
         report_to='wandb', 
         run_name=key,
-        max_seq_length=2048,
+        max_length=int(max_length),
+        dataset_text_field="text",
     )
     
     if train_on_completion_only:
@@ -141,34 +157,24 @@ def main(
         
         trainer = SFTTrainer(
             model=model,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             train_dataset=train_data,
             peft_config=lora_config,
             args=training_args,
-            formatting_func=lambda data: generate_prompt_train(
-                data, 
-                tokenizer=tokenizer,
-                instruction=instruction,
-                template=template,
-            ),
             data_collator=collator,
         )
     else:
         trainer = SFTTrainer(
             model=model,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             train_dataset=train_data,
             peft_config=lora_config,
             args=training_args,
-            formatting_func=lambda data: generate_prompt_train(
-                data, 
-                tokenizer=tokenizer,
-                instruction=instruction,
-                template=template,
-            ),
         )
     
-    trainer.train()
+    train_result = trainer.train()
+    with open(os.path.join(output_dir, "training_metrics.json"), "w") as f:
+        json.dump({"train_metrics": train_result.metrics, "log_history": trainer.state.log_history}, f, indent=2)
     trainer.model.save_pretrained(output_dir)
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import os
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from peft import PeftModel
 import fire
 from tqdm import tqdm
 import json
@@ -88,6 +89,7 @@ def main(
     batch_size=2,
     template_dict_path = None,
     fewshot_path = None,
+    max_eval_samples = 0,
 ):
     # visible devices 
     print(f"visible devices: {os.environ['CUDA_VISIBLE_DEVICES']}")
@@ -100,6 +102,8 @@ def main(
     print(f"Use CoT: {CoT}")
         
     eval_data = load_dataset("json", data_files=eval_data_path, split='train')
+    if int(max_eval_samples) > 0:
+        eval_data = eval_data.select(range(min(int(max_eval_samples), len(eval_data))))
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -114,12 +118,19 @@ def main(
         template = '\n\n'.join([template_dict['first_input'], fewshot, template_dict['oneshot_input'], template_dict['final_output']]).strip()
     
     tokenizer = AutoTokenizer.from_pretrained(base_model)
+    tokenizer.pad_token = tokenizer.eos_token
     prompt_list = generate_prompt_test(eval_data, tokenizer, instruction=instruction, template=template)
     
     prompt_list = ListDataset(prompt_list)
     
-    if model_dir != None:  
-        finetune_model = AutoModelForCausalLM.from_pretrained(model_dir, device_map={"":0})
+    if model_dir != None:
+        if os.path.isfile(os.path.join(model_dir, "adapter_config.json")):
+            base = AutoModelForCausalLM.from_pretrained(
+                base_model, device_map={"": 0}, torch_dtype="auto"
+            )
+            finetune_model = PeftModel.from_pretrained(base, model_dir)
+        else:
+            finetune_model = AutoModelForCausalLM.from_pretrained(model_dir, device_map={"":0})
     else:
         finetune_model = AutoModelForCausalLM.from_pretrained(base_model, device_map={"":0})
     
@@ -210,7 +221,7 @@ def main(
         second_eval_result_dicts = {
             'accuracy': correct / total,
             'extracted_ratio': (total - unextracted) / total,
-            'extracted_accuracy': correct / (total - unextracted),
+            'extracted_accuracy': (correct / (total - unextracted)) if total - unextracted > 0 else 0,
             'total': total,
             'correct': correct,
             'extracted': total - unextracted,
